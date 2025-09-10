@@ -1,0 +1,153 @@
+name: Intecap API Probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      idUnidadOperativa:
+        description: "ID del centro (ej. 104202=CE1)"
+        required: true
+        default: "104202"
+      pagina:
+        description: "Página para listado paginado"
+        required: true
+        default: "1"
+      registrosPorPagina:
+        description: "Registros por página"
+        required: true
+        default: "20"
+      detalleId:
+        description: "Opcional: idEventoUnico para probar detalle"
+        required: false
+        default: ""
+      userAgentMozilla:
+        description: "Forzar User-Agent de navegador"
+        type: boolean
+        required: true
+        default: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mostrar IP pública del runner
+        run: |
+          echo "IP (ifconfig.me): $(curl -s https://ifconfig.me)"
+          echo "IP (OpenDNS): $(dig +short myip.opendns.com @resolver1.opendns.com || true)"
+          echo "Fecha/Hora UTC: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+      - name: Preparar variables de entorno
+        id: prep
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ]; then
+            echo "Falta el secret TOKEN" >&2
+            exit 1
+          fi
+          mkdir -p responses
+          echo "BASE=https://api.intecap.edu.gt/api/v2" >> $GITHUB_ENV
+          echo "UA=${{ github.event.inputs.userAgentMozilla == 'true' && 'Mozilla/5.0' || 'curl/7.x' }}" >> $GITHUB_ENV
+
+          if [ -n "${X_API_KEY:-}" ]; then
+            echo "XAPI_PRESENT=true" >> $GITHUB_ENV
+          else
+            echo "XAPI_PRESENT=false" >> $GITHUB_ENV
+          fi
+
+      - name: Probar /Curso/Centros
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+        run: |
+          set -euo pipefail
+          HDRS=(-H "Authorization: Bearer ${TOKEN}" -H "Accept: application/json" -H "User-Agent: ${UA}")
+          if [ "${XAPI_PRESENT}" = "true" ]; then
+            HDRS+=(-H "x-api-key: ${X_API_KEY}")
+          fi
+          echo "===> GET $BASE/Curso/Centros"
+          curl -sS -D responses/centros.headers "${HDRS[@]}" "$BASE/Curso/Centros" -o responses/centros.json || true
+          echo "--- STATUS & HEADERS (/Curso/Centros) ---"
+          cat responses/centros.headers | sed -n '1,40p'
+          echo
+          echo "--- BODY (primeras líneas) ---"
+          sed -n '1,80p' responses/centros.json || true
+
+      - name: Probar /Curso/Centro/{id}/pagina/registros (paginado)
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          IDUO: ${{ github.event.inputs.idUnidadOperativa }}
+          PAG: ${{ github.event.inputs.pagina }}
+          RPP: ${{ github.event.inputs.registrosPorPagina }}
+        run: |
+          set -euo pipefail
+          HDRS=(-H "Authorization: Bearer ${TOKEN}" -H "Accept: application/json" -H "User-Agent: ${UA}")
+          if [ "${XAPI_PRESENT}" = "true" ]; then
+            HDRS+=(-H "x-api-key: ${X_API_KEY}")
+          fi
+          URL="$BASE/Curso/Centro/${IDUO}/${PAG}/${RPP}"
+          echo "===> GET ${URL}"
+          curl -sS -D responses/centro_pag.headers "${HDRS[@]}" "${URL}" -o responses/centro_pag.json || true
+          echo "--- STATUS & HEADERS (Centro paginado) ---"
+          cat responses/centro_pag.headers | sed -n '1,80p'
+          echo
+          echo "--- BODY (primeras líneas) ---"
+          sed -n '1,120p' responses/centro_pag.json || true
+          echo
+          echo "Posible Transaction ID:"
+          grep -i "Transaction ID" -n responses/centro_pag.json responses/centro_pag.headers || true
+
+      - name: Probar /Curso/Especialidades/{idUnidadOperativa}
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          IDUO: ${{ github.event.inputs.idUnidadOperativa }}
+        run: |
+          set -euo pipefail
+          HDRS=(-H "Authorization: Bearer ${TOKEN}" -H "Accept: application/json" -H "User-Agent: ${UA}")
+          if [ "${XAPI_PRESENT}" = "true" ]; then
+            HDRS+=(-H "x-api-key: ${X_API_KEY}")
+          fi
+          URL="$BASE/Curso/Especialidades/${IDUO}"
+          echo "===> GET ${URL}"
+          curl -sS -D responses/especialidades.headers "${HDRS[@]}" "${URL}" -o responses/especialidades.json || true
+          echo "--- STATUS & HEADERS (Especialidades) ---"
+          cat responses/especialidades.headers | sed -n '1,80p'
+          echo
+          echo "--- BODY (primeras líneas) ---"
+          sed -n '1,120p' responses/especialidades.json || true
+          echo
+          echo "Posible Transaction ID:"
+          grep -i "Transaction ID" -n responses/especialidades.json responses/especialidades.headers || true
+
+      - name: (Opcional) Probar /Curso/{idEventoUnico}
+        if: ${{ github.event.inputs.detalleId != '' }}
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          DET: ${{ github.event.inputs.detalleId }}
+        run: |
+          set -euo pipefail
+          HDRS=(-H "Authorization: Bearer ${TOKEN}" -H "Accept: application/json" -H "User-Agent: ${UA}")
+          if [ "${XAPI_PRESENT}" = "true" ]; then
+            HDRS+=(-H "x-api-key: ${X_API_KEY}")
+          fi
+          URL="$BASE/Curso/${DET}"
+          echo "===> GET ${URL}"
+          curl -sS -D responses/detalle.headers "${HDRS[@]}" "${URL}" -o responses/detalle.json || true
+          echo "--- STATUS & HEADERS (Detalle) ---"
+          cat responses/detalle.headers | sed -n '1,80p'
+          echo
+          echo "--- BODY (primeras líneas) ---"
+          sed -n '1,160p' responses/detalle.json || true
+          echo
+          echo "Posible Transaction ID:"
+          grep -i "Transaction ID" -n responses/detalle.json responses/detalle.headers || true
+
+      - name: Subir artefactos (respuestas y headers)
+        uses: actions/upload-artifact@v4
+        with:
+          name: intecap-responses
+          path: responses/
